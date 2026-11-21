@@ -250,4 +250,6 @@ OTA update complete
 OTA script complete.
 
 Reset the MCU manually to apply the staged firmware.
-```
+```#   K l i p p e r - K o b r a - S 1  
+ #   K l i p p e r - K o b r a - S 1  
+ 
