@@ -1,36 +1,48 @@
-# Pressure Advance Auto-Calibration Plugin - Main Documentation
+# Pressure Advance Auto-Calibration Plugin - Ready to Use
 
 ## Quick Start
 
-### 1. Install Plugin
-
-Copy plugin files to your Klipper extras directory:
-
-```
-C:\Klipper\klippy\extras\klipper_pwa_plugin\
-```
-
-### 2. Configure printer.cfg
-
-Add these lines (after your `[auto_pressure_advance]` section):
-
-```ini
-# Pressure Advance Auto-Calibration Plugin with ACEPRO Integration
-[include klipper_pwa_plugin/pressure_advance.cfg]
-[include klipper_pwa_plugin/pressure_advance_acepro.cfg]
-```
-
-### 3. Restart Klipper
+### 1. Restart Klipper
 
 ```bash
 net stop klipper && net start klipper
 ```
 
-### 4. Run Calibration
+### 2. Verify Installation
 
 ```gcode
 G28
+PA_STATUS
+```
+
+Expected output:
+```
+=== Pressure Advance Status ===
+Current PA: 0.005939
+Nozzle Temp: XX.XC
+Target Temp: XXX.XC
+Current ACE Tool: T-1
+===============================
+Note: ACEPRO will auto-switch PA profiles on tool change.
+```
+
+### 3. Run Calibration
+
+```gcode
+; Home first
+G28
+
+; Run initial calibration
 PA_CALIBRATE SAVE=1
+
+; Calibrate with specific profile
+PA_CALIBRATE SAVE=1 PROFILE=pla
+
+; Calibrate with PETG
+PA_CALIBRATE SAVE=1 PROFILE=petg
+
+; Calibrate with TPU
+PA_CALIBRATE SAVE=1 PROFILE=tpu
 ```
 
 ## Available Commands
@@ -87,13 +99,48 @@ PA_SET PA=0.026 SAVE=1 PROFILE=pla
 PA_TEST PA=0.026
 ```
 
+## Configuration
+
+Your `printer.cfg` should have these lines (around line 370-375):
+
+```ini
+# Pressure Advance Auto-Calibration Plugin with ACEPRO Integration
+[auto_pressure_advance]
+save_config: True
+
+[include klipper_pwa_plugin/pressure_advance.cfg]
+[include klipper_pwa_plugin/pressure_advance_acepro.cfg]
+```
+
+## Features
+
+- **Automatic Calibration** - Uses CS1237 load cell sensor
+- **Profile Management** - Save different PA values for different materials
+- **ACEPRO Integration** - Automatic PA profile switching on tool change
+- **Auto-Save** - Results automatically saved to `printer.cfg` when using `SAVE=1`
+
+## Performance
+
+- **Calibration time:** 2-3 minutes
+- **Tool change overhead:** ~50-100ms (negligible)
+- **Profile switching:** Instant
+- **Memory usage:** <1KB
+
 ## Documentation
 
+All documentation is available in:
+```
+D:\klipper-kobra-s1\klipper_pwa_plugin\
+```
+
+Key files:
 - **README.md** - This file (main documentation)
 - **ACEPRO_README.md** - ACEPRO-specific guide
 - **INSTALL_INSTRUCTIONS.md** - Installation guide
 - **GETTING_STARTED.md** - Quick start guide
 - **SETUP_COMPLETE.md** - Setup complete guide
+- **FINAL_SETUP_SUMMARY.md** - Final setup summary
+- **HOW_IT_WORKS.md** - How the plugin works
 
 ## Troubleshooting
 
@@ -137,16 +184,13 @@ Run initial calibration:
 PA_CALIBRATE SAVE=1
 ```
 
-## Features
+## Summary
 
-- **Automatic Calibration** - Uses CS1237 load cell sensor
-- **Profile Management** - Save different PA values for different materials
-- **ACEPRO Integration** - Automatic PA profile switching on tool change
-- **Auto-Save** - Results automatically saved to `printer.cfg` when using `SAVE=1`
+✅ **Plugin installed** - Files in `C:\Klipper\klippy\extras\klipper_pwa_plugin\`
+✅ **Configured correctly** - `printer.cfg` includes the plugin
+✅ **`auto_pressure_advance` section present** - Required by Klipper
+✅ **Macros ready** - `PA_CALIBRATE`, `PA_TEST`, `PA_SET`, `PA_STATUS`, `PA_SYNC`, `PA_SYNC_SET`
+✅ **ACEPRO integrated** - Automatic PA profile switching on tool change
+✅ **Ready to use** - Run `PA_CALIBRATE SAVE=1` to calibrate
 
-## Performance
-
-- **Calibration time:** 2-3 minutes
-- **Tool change overhead:** ~50-100ms (negligible)
-- **Profile switching:** Instant
-- **Memory usage:** <1KB
+**Restart Klipper to complete the setup!**
