@@ -90,64 +90,63 @@ Add to `printer.cfg`:
 
 ```ini
 [auto_pressure_advance]
-# Load cell object providing the force readings
-sensor: cs1237
+# Every option is optional.  The empty section is intentional: it is valid
+# even if the printer is still running an older copy of the plugin.  Uncomment
+# an option only to override the default shown here.
 
-# Extruder whose pressure advance is measured
-extruder: extruder
+# sensor: cs1237         # load cell object providing the force readings
+# extruder: extruder     # extruder whose pressure advance is measured
 
 # Safe in-air extrusion position (the filament droops - clean up afterwards)
-test_x: 210
-test_y: 210
-test_z: 25
+# test_x: 210
+# test_y: 210
+# test_z: 25
 # use_test_position: True
 
 # Temperature for the test
-extruder_temp: 220
+# extruder_temp: 220
 # bed_temp: 0
 
 # Test move geometry
-filament_speed: 2.5      # mm/s of filament (2.5 mm/s ~ 6 mm3/s of flow)
-accel_ratio: 10.0        # acceleration / speed (1/s) -> 100 ms ramp
-move_speed: 40.0         # mm/s of the toolhead move
-move_length: 15.0        # mm of travel during the test move
-prime_length: 5.0        # mm of filament used to prime the extruder
-settle_time: 0.7         # seconds to wait before/after each test move
-cycles: 3                # test moves per pressure advance value
+# filament_speed: 2.5    # mm/s of filament (~6 mm3/s of flow)
+# accel_ratio: 10.0      # acceleration / speed (1/s) -> 100 ms ramp
+# move_speed: 40.0       # mm/s of the toolhead move
+# move_length: 15.0      # mm of travel during the test move
+# prime_length: 5.0      # mm of filament used to prime the extruder
+# settle_time: 0.7       # seconds to wait before/after each test move
+# cycles: 3              # test moves per pressure advance value
 
 # Length of the high pass filter, as a multiple of the acceleration ramp
-window_ratio: 1.5
+# window_ratio: 1.5
 
 # Pressure advance sweep
-pa_start: 0.000
-pa_end: 0.080
-pa_step: 0.010
-refine_passes: 1
-refine_ratio: 0.25
+# pa_start: 0.000
+# pa_end: 0.080
+# pa_step: 0.010
+# refine_passes: 1
+# refine_ratio: 0.25
 
 # Load cell sampling
-sample_rate: 100         # Hz (the MCU report rate is raised temporarily)
-sensor_settle: 0.6      # s to wait after enabling the sensor (see below)
-min_response_ratio: 5.0  # minimum force response / sensor noise
-require_response: True   # abort when the load cell does not react at all
+# sample_rate: 100       # Hz (the MCU report rate is raised temporarily)
+# sensor_settle: 0.6     # s to wait after enabling the sensor (see below)
+# min_response_ratio: 5.0  # minimum force response / sensor noise
+# require_response: True   # abort when the load cell does not react at all
 
-# Behaviour
-# Staged config changes (pressure_advance, profiles, tool_profiles) are
-# written to printer.cfg automatically when the printer is idle.  This runs
-# Klipper's SAVE_CONFIG, so the printer restarts once.
-auto_save_config: True
-auto_save_delay: 1.0     # seconds to wait before the automatic save
-# save_config: False     # legacy option; kept for old macros
-restore_sensor_state: True
-suspend_runout_sensors: True
+# Behaviour.  Staged config changes (pressure_advance, profiles,
+# tool_profiles) are written to printer.cfg automatically when the printer is
+# idle.  This runs Klipper's SAVE_CONFIG, so the printer restarts once.
+# auto_save_config: True
+# auto_save_delay: 1.0    # seconds to wait before the automatic save
+# save_config: False      # legacy option; kept for old macros
+# restore_sensor_state: True
+# suspend_runout_sensors: True
 
 # Pressure advance per filament type (see "Different pressure advance per
 # filament type" below)
-#profiles: PLA=0.0213, PETG=0.0245
-#tool_profiles: 0=PLA, 1=PETG
-auto_apply_profiles: True
-# How often ACE is polled for a completed toolchange (seconds)
-tool_poll_interval: 0.5
+# profiles: PLA=0.0213, PETG=0.0245
+# tool_profiles: 0=PLA, 1=PETG
+# auto_apply_profiles: True
+# tool_poll_interval: 0.5  # seconds between ACE tool checks
 ```
 
 ### Notes on the parameters
@@ -377,24 +376,30 @@ Klipper refuses to start when a config option is **not read** by the
 module that owns the section (`ConfigValidate.check_unused` in
 `klippy/configfile.py`).  The message therefore means: *the module that
 was loaded for `[auto_pressure_advance]` does not know the option
-`extruder`*.
+`extruder`*.  The current plugin does read it, so this almost always means
+the printer is running an **older copy** of the plugin.
 
-That is what happens when the printer is running an **older copy** of this
-plugin (one written against a different option set) while the config file
-already contains the newer options.
+Quickest recovery:
 
-1. Copy the current `auto_pressure_advance.py` over the one on the printer
-   (the file that is loaded is the one in the Klipper installation that
-   actually runs, usually `~/klipper/klippy/extras/`).
-2. `FIRMWARE_RESTART`
+1. Use the empty `[auto_pressure_advance]` section shown in "Configuration"
+   above.  Every option has a default, so no explicit options are required.
+2. `FIRMWARE_RESTART` and confirm Klipper starts.
+
+Permanent fix:
+
+1. Copy the current `auto_pressure_advance.py` over the one in the Klipper
+   installation that actually runs (usually `~/klipper/klippy/extras/`).
+   Remove any stale `~/klipper/klippy/extras/__pycache__/auto_pressure_advance*.pyc`
+   while the printer is stopped.
+2. `FIRMWARE_RESTART`.  `klippy.log` should contain a line like
+   `auto_pressure_advance: version 1.4 loaded from ...`, which confirms the
+   file that was loaded.
 3. Run `AUTO_PRESSURE_ADVANCE_STATUS` and check that it reports
    `version 1.4` and the ACE tool/profile currently in use.
 
-Version 1.4 also *consumes* options it does not recognise
-(it logs a warning for each one and keeps going), so a config file that
-still carries options from an older config block can no longer stop the
-printer from starting.  The recognised options are listed above; remove
-the obsolete ones from the config once the printer runs again.
+Version 1.4 consumes every option in its section up front (it logs a warning
+for ones it does not recognise), so a stale config block can no longer stop
+the printer from starting once the correct plugin file is loaded.
 
 ### `Section 'auto_pressure_advance' is not a valid config section`
 

@@ -144,9 +144,20 @@ class AutoPressureAdvance:
         self.gcode = self.printer.lookup_object('gcode')
         self.reactor = self.printer.get_reactor()
 
+        logging.info("auto_pressure_advance: version %s loaded from %s",
+                     PLUGIN_VERSION, __file__)
         # Read the options through a wrapper that records which option
         # names were used (see _OptionReader).
         cfg = _OptionReader(config)
+
+        # Consume every option in our section up front.  Klipper validates
+        # that each option was read by the module owning the section, and
+        # doing this before any other work means a partially initialised
+        # plugin can never leave an option "unused".  Options we do not
+        # recognise are still recorded below and ignored.
+        self._section_options = list(config.get_prefix_options(''))
+        for option in self._section_options:
+            config.get(option)
 
         # Load cell object providing adc/raw readings (CS1237 in this fork)
         self.sensor_name = cfg.get('sensor', 'cs1237')
@@ -245,14 +256,13 @@ class AutoPressureAdvance:
         # module that owns the section.  Consume any option this version
         # does not know about (for example one left over from an older
         # config block) so that it cannot block the printer from starting.
-        self.unknown_options = []
-        for option in config.get_prefix_options(''):
-            if option.lower() not in cfg.known:
-                self.unknown_options.append(option)
-                logging.warning(
-                    "auto_pressure_advance: ignoring unknown option '%s' in "
-                    "section '%s'", option, self.name)
-                config.get(option)
+        self.unknown_options = [
+            option for option in self._section_options
+            if option.lower() not in cfg.known]
+        for option in self.unknown_options:
+            logging.warning(
+                "auto_pressure_advance: ignoring unknown option '%s' in "
+                "section '%s'", option, self.name)
 
         # Runtime state
         self._samples = []
