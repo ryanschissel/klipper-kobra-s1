@@ -92,7 +92,7 @@ gcode:
     {% set profile = params.PROFILE|default("pla")|string %}
     {% set current_pa = printer['extruder'].pressure_advance %}
     
-    {action_respond_info(f"Creating/updating PA profile for '{profile}': {current_pa}")}
+    {action_respond_info("Creating/updating PA profile for '" ~ profile ~ "': " ~ current_pa)}
     
     # This macro is primarily for manual profile management
     # For calibration, use: PA_CALIBRATE SAVE=1 PROFILE={profile}
