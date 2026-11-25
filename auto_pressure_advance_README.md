@@ -71,8 +71,10 @@ FIRMWARE_RESTART
    advance in `pa_start .. pa_end`, then refines the search around the
    best value (`refine_passes`, `refine_ratio`) and fits a parabola
    through the three points around the minimum for the final value.  The
-   best value is applied immediately and can optionally be written to
-   `printer.cfg` (`SAVE=1`, followed by `SAVE_CONFIG`).
+   best value is applied immediately and, by default, written to
+   `printer.cfg` automatically.  Klipper performs a `SAVE_CONFIG` and restarts
+   once the printer is idle; pass `SAVE=0` or set `auto_save_config: False`
+   to keep the value in memory only.
 
 5. **Safety.**  The calibration requires homed axes, refuses to run while
    a print is active, heats the nozzle to `extruder_temp` and moves to a
@@ -130,7 +132,12 @@ min_response_ratio: 5.0  # minimum force response / sensor noise
 require_response: True   # abort when the load cell does not react at all
 
 # Behaviour
-save_config: False       # write the result to printer.cfg (SAVE_CONFIG!)
+# Staged config changes (pressure_advance, profiles, tool_profiles) are
+# written to printer.cfg automatically when the printer is idle.  This runs
+# Klipper's SAVE_CONFIG, so the printer restarts once.
+auto_save_config: True
+auto_save_delay: 1.0     # seconds to wait before the automatic save
+# save_config: False     # legacy option; kept for old macros
 restore_sensor_state: True
 suspend_runout_sensors: True
 
@@ -177,9 +184,12 @@ Runs the load cell based calibration.
 
 ```gcode
 G28
-AUTO_PRESSURE_ADVANCE_CALIBRATE EXTRUDER_TEMP=220 PA_START=0.0 PA_END=0.08 PA_STEP=0.01 SAVE=1
-SAVE_CONFIG
+AUTO_PRESSURE_ADVANCE_CALIBRATE EXTRUDER_TEMP=220 PA_START=0.0 PA_END=0.08 PA_STEP=0.01 PROFILE=PLA
 ```
+
+`SAVE` defaults to `1`, so the result, the `profiles` list and any tool
+mapping are staged and then written to `printer.cfg` automatically when the
+printer is idle.  Use `SAVE=0` to try a value without persisting it.
 
 Parameters: `PA_START`, `PA_END`, `PA_STEP`, `EXTRUDER_TEMP`, `BED_TEMP`,
 `CYCLES`, `SAMPLE_RATE`, `EXTRUDER`, `SAVE`, `PROFILE`.  Older macros used
@@ -204,13 +214,14 @@ Parameters: `EXTRUDER_TEMP`.
 
 ### `AUTO_PRESSURE_ADVANCE_SET`
 
-Sets (and optionally saves) the pressure advance by hand.  With `PROFILE=`
-the value is also stored as a named filament profile.
+Sets the pressure advance by hand.  With `PROFILE=` the value is also stored
+as a named filament profile.  `SAVE` defaults to `1`; both the live value and
+the profile are automatically persisted to `printer.cfg` when the printer is
+idle.
 
 ```gcode
-AUTO_PRESSURE_ADVANCE_SET ADVANCE=0.035 SAVE=1
-AUTO_PRESSURE_ADVANCE_SET ADVANCE=0.0213 PROFILE=PLA SAVE=1
-SAVE_CONFIG
+AUTO_PRESSURE_ADVANCE_SET ADVANCE=0.035
+AUTO_PRESSURE_ADVANCE_SET ADVANCE=0.0213 PROFILE=PLA
 ```
 
 Parameters: `ADVANCE`, `SMOOTH_TIME`, `EXTRUDER`, `SAVE`, `PROFILE`.
@@ -221,9 +232,21 @@ Maps an ACE Pro tool number to a stored profile so toolchanges select it
 automatically.
 
 ```gcode
-AUTO_PRESSURE_ADVANCE_MAP TOOL=0 PROFILE=PLA SAVE=1
-SAVE_CONFIG
+AUTO_PRESSURE_ADVANCE_MAP TOOL=0 PROFILE=PLA
 ```
+
+`SAVE` defaults to `1`, so the mapping is written to `printer.cfg`
+automatically when the printer is idle.
+
+### Automatic persistence
+
+`SAVE_CONFIG` rewrites `printer.cfg` and restarts Klipper.  To avoid
+interrupting a print, the plugin stages changes with `configfile.set()` and
+runs `SAVE_CONFIG` from a timer after `auto_save_delay`.  It waits while
+`print_stats.state` is `printing` or `paused`, while ACE reports a toolchange
+in progress, and while a calibration is running.  `AUTO_PRESSURE_ADVANCE_STATUS`
+shows `auto save : waiting to save (...)` while it is waiting.  If Klipper
+rejects the save, run `SAVE_CONFIG` manually after fixing the reported problem.
 
 ### `AUTO_PRESSURE_ADVANCE_STATUS`
 
@@ -232,11 +255,12 @@ of the last calibration.  The version line is the quickest way to confirm
 which build of the plugin the printer is actually running:
 
 ```
-auto_pressure_advance plugin version 1.3
+auto_pressure_advance plugin version 1.4
   sensor          : cs1237
   extruder        : extruder
   ace tool        : T0
   active profile  : pla
+  auto save       : on
   unknown options : none
 ```
 
@@ -286,11 +310,13 @@ temperature shifts the optimum as well:
 AUTO_PRESSURE_ADVANCE_CALIBRATE PROFILE=PLA EXTRUDER_TEMP=210
 # PETG loaded, printed at 240 C
 AUTO_PRESSURE_ADVANCE_CALIBRATE PROFILE=PETG EXTRUDER_TEMP=240
-SAVE_CONFIG
 ```
 
-`PROFILE=<name>` stores the result under that name (in the `profiles`
-option of the `[auto_pressure_advance]` section, kept by `SAVE_CONFIG`).
+`PROFILE=<name>` stores the result under that name in the `profiles` option
+of the `[auto_pressure_advance]` section.  With `auto_save_config: True` the
+plugin stages the value and runs `SAVE_CONFIG` automatically once the printer
+is idle; Klipper writes the values into the autosave block at the bottom of
+`printer.cfg` and then restarts.
 
 ### Using the values
 
@@ -314,9 +340,11 @@ re-applied after a Klipper restart.
 The mapping can also be edited without restarting:
 
 ```gcode
-AUTO_PRESSURE_ADVANCE_MAP TOOL=0 PROFILE=PLA SAVE=1
-SAVE_CONFIG
+AUTO_PRESSURE_ADVANCE_MAP TOOL=0 PROFILE=PLA
 ```
+
+The automatic save writes the updated `tool_profiles` value to
+`printer.cfg` and restarts Klipper when it is safe to do so.
 
 Manual control:
 
@@ -360,9 +388,9 @@ already contains the newer options.
    actually runs, usually `~/klipper/klippy/extras/`).
 2. `FIRMWARE_RESTART`
 3. Run `AUTO_PRESSURE_ADVANCE_STATUS` and check that it reports
-   `version 1.3` and the ACE tool/profile currently in use.
+   `version 1.4` and the ACE tool/profile currently in use.
 
-Version 1.3 of the plugin also *consumes* options it does not recognise
+Version 1.4 also *consumes* options it does not recognise
 (it logs a warning for each one and keeps going), so a config file that
 still carries options from an older config block can no longer stop the
 printer from starting.  The recognised options are listed above; remove

@@ -45,7 +45,7 @@ import math
 # Bump this whenever the option set or the behaviour changes.  It is
 # reported by AUTO_PRESSURE_ADVANCE_STATUS so that it is possible to
 # confirm which version of the plugin a printer is actually running.
-PLUGIN_VERSION = '1.3'
+PLUGIN_VERSION = '1.4'
 
 
 class _OptionReader:
@@ -203,7 +203,13 @@ class AutoPressureAdvance:
         self.require_response = cfg.getboolean('require_response', True)
 
         # Behaviour
+        # "save_config" is kept for compatibility with older macros.  Profile
+        # changes are now persisted automatically by default; a printer that
+        # wants the old behaviour can set auto_save_config: False.
         self.save_config = cfg.getboolean('save_config', False)
+        self.auto_save_config = cfg.getboolean('auto_save_config', True)
+        self.auto_save_delay = cfg.getfloat('auto_save_delay', 1.0,
+                                            minval=0., maxval=30.)
         self.restore_sensor_state = cfg.getboolean('restore_sensor_state',
                                                    True)
         self.suspend_runout = cfg.getboolean('suspend_runout_sensors', True)
@@ -259,6 +265,13 @@ class AutoPressureAdvance:
         self._active_profile = None
         self._tool_timer = None
         self._suspend_apply = False
+        # Automatic config persistence.  Klipper writes configfile.set()
+        # changes to printer.cfg only when SAVE_CONFIG runs, and that command
+        # restarts Klipper.  Changes are therefore applied through a timer
+        # that waits for a safe moment.
+        self._save_timer = None
+        self._save_reason = None
+        self._save_error = None
 
         # Backward-compatible handler names for callers of older builds.
         self.cmd_AUTO_PRESSURE_ADVANCE_CALIBRATE = self.cmd_calibrate
@@ -324,6 +337,102 @@ class AutoPressureAdvance:
 
     def _format_pairs(self, pairs):
         return ", ".join("%s=%s" % (k, v) for k, v in sorted(pairs.items()))
+
+    # ------------------------------------------------------------------
+    # Automatic config persistence
+    # ------------------------------------------------------------------
+    def _get_configfile(self):
+        return self.printer.lookup_object('configfile')
+
+    def _config_save_pending(self, eventtime=None):
+        if eventtime is None:
+            eventtime = self.reactor.monotonic()
+        try:
+            status = self._get_configfile().get_status(eventtime)
+            return bool(status.get('save_config_pending', False))
+        except Exception:
+            logging.exception("auto_pressure_advance: unable to read config "
+                              "save state")
+            return True
+
+    def _cancel_auto_save_timer(self):
+        timer = self._save_timer
+        self._save_timer = None
+        if timer is not None:
+            self.reactor.update_timer(timer, self.reactor.NEVER)
+
+    def _ready_for_auto_save(self, eventtime):
+        """False while a restart could interrupt a print or toolchange."""
+        if self._save_reason is None:
+            return False
+        if self._suspend_apply:
+            return False
+        try:
+            tool, in_progress = self._get_current_tool(eventtime)
+        except Exception:
+            tool, in_progress = None, False
+        if in_progress:
+            return False
+        print_stats = self.printer.lookup_object('print_stats', None)
+        if print_stats is not None:
+            try:
+                state = print_stats.get_status(eventtime).get('state', '')
+            except Exception:
+                state = ''
+            if state in ('printing', 'paused'):
+                return False
+        return True
+
+    def _request_auto_save(self, reason):
+        """Persist staged config changes once it is safe to restart."""
+        self._save_reason = reason
+        self._save_error = None
+        if not self.auto_save_config:
+            return False
+        waketime = self.reactor.monotonic() + self.auto_save_delay
+        try:
+            if self._save_timer is None:
+                self._save_timer = self.reactor.register_timer(
+                    self._auto_save_event, waketime)
+            else:
+                self.reactor.update_timer(self._save_timer, waketime)
+        except Exception:
+            logging.exception("auto_pressure_advance: unable to schedule "
+                              "SAVE_CONFIG")
+            self._save_error = "unable to schedule SAVE_CONFIG"
+            return False
+        return True
+
+    def _auto_save_event(self, eventtime):
+        if not self._ready_for_auto_save(eventtime):
+            # A print or ACE toolchange is running.  Keep the config changes
+            # staged and try again on the next poll.
+            return eventtime + max(1.0, self.tool_poll_interval)
+        if not self._config_save_pending(eventtime):
+            self._cancel_auto_save_timer()
+            return self.reactor.NEVER
+        # SAVE_CONFIG restarts Klipper, so remove our timer before running it.
+        self._cancel_auto_save_timer()
+        try:
+            logging.info("auto_pressure_advance: automatically saving config "
+                         "(%s)", self._save_reason)
+            self.gcode.run_script_from_command('SAVE_CONFIG')
+        except Exception as e:
+            logging.exception("auto_pressure_advance: automatic SAVE_CONFIG "
+                              "failed")
+            self._save_error = str(e)
+        return self.reactor.NEVER
+
+    def _save_hint(self):
+        if self._save_error:
+            return ("Automatic save failed (%s); run SAVE_CONFIG manually."
+                    % (self._save_error,))
+        if self._save_timer is not None:
+            return ("It will be written to printer.cfg automatically when "
+                    "the printer is idle (Klipper will restart).")
+        if not self.auto_save_config:
+            return "Run SAVE_CONFIG to keep it."
+        return "It has been written to printer.cfg."
 
     def _connect(self):
         sensor = self.printer.lookup_object(self.sensor_name, None)
@@ -699,8 +808,8 @@ class AutoPressureAdvance:
         self.gcode.run_script_from_command(cmd)
 
     def _save_pa(self, extruder_name, pa, smooth_time=None):
-        """Write a pressure advance value into printer.cfg (for SAVE_CONFIG)."""
-        configfile = self.printer.lookup_object('configfile')
+        """Stage a pressure advance value for the next config save."""
+        configfile = self._get_configfile()
         configfile.set(extruder_name, 'pressure_advance', "%.6f" % (float(pa),))
         if smooth_time is not None:
             configfile.set(extruder_name, 'pressure_advance_smooth_time',
@@ -931,18 +1040,18 @@ class AutoPressureAdvance:
     cmd_calibrate_help = (
         "Calibrate pressure advance from the load cell. Parameters: "
         "PA_START=<f> PA_END=<f> PA_STEP=<f> EXTRUDER_TEMP=<c> "
-        "BED_TEMP=<c> CYCLES=<n> SAMPLE_RATE=<hz> SAVE=<0|1> "
+        "BED_TEMP=<c> CYCLES=<n> SAMPLE_RATE=<hz> SAVE=<0|1, default 1> "
         "PROFILE=<name> (PA_PROFILE=<name> also accepted)")
     cmd_set_help = (
         "Set the pressure advance value. Parameters: ADVANCE=<f> "
-        "SMOOTH_TIME=<s> SAVE=<0|1> PROFILE=<name>")
+        "SMOOTH_TIME=<s> SAVE=<0|1, default 1> PROFILE=<name>")
     cmd_apply_help = (
         "Apply a stored pressure advance profile. Parameters: PROFILE=<name>")
     cmd_profiles_help = (
         "List the stored pressure advance profiles and the tool mapping.")
     cmd_map_help = (
         "Map an ACE Pro tool index to a pressure advance profile. "
-        "Parameters: TOOL=<n> PROFILE=<name> SAVE=<0|1>")
+        "Parameters: TOOL=<n> PROFILE=<name> SAVE=<0|1, default 1>")
     cmd_test_help = (
         "Run a single calibration move and report the measured force "
         "response (diagnostics). Parameters: EXTRUDER_TEMP=<c>")
@@ -992,7 +1101,9 @@ class AutoPressureAdvance:
         smooth_time = gcmd.get_float(
             'SMOOTH_TIME', None, minval=0., maxval=.200)
         extruder = gcmd.get('EXTRUDER', self.extruder_name)
-        save = gcmd.get_int('SAVE', 1 if self.save_config else 0, minval=0,
+        save = gcmd.get_int('SAVE',
+                            1 if (self.save_config or self.auto_save_config)
+                            else 0, minval=0,
                             maxval=1)
         profile = self._get_profile_name(gcmd)
         cmd = "SET_PRESSURE_ADVANCE EXTRUDER=%s ADVANCE=%.6f" % (extruder,
@@ -1013,9 +1124,8 @@ class AutoPressureAdvance:
                    profile, advance))
         if save:
             self._save_pa(extruder, advance, smooth_time)
-            gcmd.respond_info(
-                "The SAVE_CONFIG command will update the printer config "
-                "file with the above and restart the printer.")
+            self._request_auto_save("pressure advance set")
+            gcmd.respond_info(self._save_hint())
 
     def cmd_map(self, gcmd):
         tool = gcmd.get_int('TOOL', None)
@@ -1032,29 +1142,44 @@ class AutoPressureAdvance:
         self.tool_profiles[tool] = key
         save = gcmd.get_int('SAVE', 1, minval=0, maxval=1)
         if save:
-            configfile = self.printer.lookup_object('configfile')
-            configfile.set(self.name, 'tool_profiles',
-                           self._format_pairs(self.tool_profiles))
-        gcmd.respond_info("Mapped T%d to pressure advance profile '%s'"
-                          % (tool, key))
+            self._store_tool_profiles()
+            self._request_auto_save("ACE tool profile map")
+            gcmd.respond_info(self._save_hint())
+            return
+        gcmd.respond_info("Mapped T%d to pressure advance profile '%s' "
+                          "(not saved)" % (tool, key))
 
     def _store_profiles(self):
-        configfile = self.printer.lookup_object('configfile')
-        configfile.set(self.name, 'profiles',
-                       self._format_pairs(self.profiles))
+        # Stage the profile values.  _request_auto_save() writes them to
+        # printer.cfg when Klipper can safely restart.
+        self._get_configfile().set(self.name, 'profiles',
+                                   self._format_pairs(self.profiles))
+
+    def _store_tool_profiles(self):
+        self._get_configfile().set(self.name, 'tool_profiles',
+                                   self._format_pairs(self.tool_profiles))
 
     def cmd_status(self, gcmd):
         tool, _in_progress = self._get_current_tool()
+        if self._save_error:
+            save_state = "failed (%s)" % (self._save_error,)
+        elif self._save_timer is not None:
+            save_state = "waiting to save (%s)" % (self._save_reason,)
+        elif self.auto_save_config:
+            save_state = "on"
+        else:
+            save_state = "off"
         gcmd.respond_info(
             "auto_pressure_advance plugin version %s\n"
             "  sensor          : %s\n"
             "  extruder        : %s\n"
             "  ace tool        : %s\n"
             "  active profile  : %s\n"
+            "  auto save       : %s\n"
             "  unknown options : %s"
             % (PLUGIN_VERSION, self.sensor_name, self.extruder_name,
                ("T%d" % tool) if tool is not None else "none",
-               self._active_profile or "none",
+               self._active_profile or "none", save_state,
                ", ".join(self.unknown_options) or "none"))
         if not self._last_result:
             gcmd.respond_info("No pressure advance calibration has been run "
@@ -1082,6 +1207,11 @@ class AutoPressureAdvance:
             'active_profile': self._active_profile,
             'toolchange_in_progress': in_progress,
             'auto_apply_profiles': self.auto_apply_profiles,
+            'auto_save_config': self.auto_save_config,
+            'auto_save_pending': self._save_timer is not None,
+            'pending_save_reason': self._save_reason,
+            'save_config_pending': self._config_save_pending(eventtime),
+            'auto_save_error': self._save_error,
             'unknown_options': list(self.unknown_options),
         }
 
@@ -1149,7 +1279,9 @@ class AutoPressureAdvance:
         cycles = gcmd.get_int('CYCLES', self.cycles, minval=1)
         sample_rate = gcmd.get_float('SAMPLE_RATE', self.sample_rate,
                                      above=1.)
-        save = gcmd.get_int('SAVE', 1 if self.save_config else 0, minval=0,
+        save = gcmd.get_int('SAVE',
+                            1 if (self.save_config or self.auto_save_config)
+                            else 0, minval=0,
                             maxval=1)
         extruder = gcmd.get('EXTRUDER', self.extruder_name)
         profile = self._get_profile_name(gcmd)
@@ -1191,21 +1323,23 @@ class AutoPressureAdvance:
                 "floor.  The result is not reliable - try more cycles, a "
                 "slower test move or a hotter nozzle.")
         if save:
-            configfile = self.printer.lookup_object('configfile')
-            configfile.set(extruder, 'pressure_advance', "%.6f" % (best_pa,))
-            gcmd.respond_info(
-                "The SAVE_CONFIG command will update the printer config "
-                "file with the above and restart the printer.")
+            self._save_pa(extruder, best_pa)
         if profile:
             # Store the result under a name so that it can be selected per
             # filament type later on.
             key = profile.strip().lower()
             self.profiles[key] = "%.6f" % (best_pa,)
             self._active_profile = key
-            self._store_profiles()
-            gcmd.respond_info(
-                "Stored pressure advance profile '%s' = %.6f.  Run "
-                "SAVE_CONFIG to keep it." % (profile, best_pa))
+            if save:
+                self._store_profiles()
+                gcmd.respond_info("Stored pressure advance profile '%s' = "
+                                  "%.6f." % (profile, best_pa))
+            else:
+                gcmd.respond_info("Updated pressure advance profile '%s' = "
+                                  "%.6f (not saved)." % (profile, best_pa))
+        if save:
+            self._request_auto_save("calibration result")
+            gcmd.respond_info(self._save_hint())
 
     def _format_result(self, result):
         lines = ["auto_pressure_advance result:",
