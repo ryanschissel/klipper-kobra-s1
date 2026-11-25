@@ -139,6 +139,8 @@ suspend_runout_sensors: True
 #profiles: PLA=0.0213, PETG=0.0245
 #tool_profiles: 0=PLA, 1=PETG
 auto_apply_profiles: True
+# How often ACE is polled for a completed toolchange (seconds)
+tool_poll_interval: 0.5
 ```
 
 ### Notes on the parameters
@@ -180,7 +182,8 @@ SAVE_CONFIG
 ```
 
 Parameters: `PA_START`, `PA_END`, `PA_STEP`, `EXTRUDER_TEMP`, `BED_TEMP`,
-`CYCLES`, `SAMPLE_RATE`, `EXTRUDER`, `SAVE`.
+`CYCLES`, `SAMPLE_RATE`, `EXTRUDER`, `SAVE`, `PROFILE`.  Older macros used
+`PA_PROFILE=<name>`; it is accepted as an alias for `PROFILE`.
 
 The output lists the score, the force response and the antisymmetry for
 every measured pressure advance, plus the noise floor of the sensor and
@@ -201,14 +204,26 @@ Parameters: `EXTRUDER_TEMP`.
 
 ### `AUTO_PRESSURE_ADVANCE_SET`
 
-Sets (and optionally saves) the pressure advance by hand.
+Sets (and optionally saves) the pressure advance by hand.  With `PROFILE=`
+the value is also stored as a named filament profile.
 
 ```gcode
 AUTO_PRESSURE_ADVANCE_SET ADVANCE=0.035 SAVE=1
+AUTO_PRESSURE_ADVANCE_SET ADVANCE=0.0213 PROFILE=PLA SAVE=1
 SAVE_CONFIG
 ```
 
-Parameters: `ADVANCE`, `SMOOTH_TIME`, `EXTRUDER`, `SAVE`.
+Parameters: `ADVANCE`, `SMOOTH_TIME`, `EXTRUDER`, `SAVE`, `PROFILE`.
+
+### `AUTO_PRESSURE_ADVANCE_MAP`
+
+Maps an ACE Pro tool number to a stored profile so toolchanges select it
+automatically.
+
+```gcode
+AUTO_PRESSURE_ADVANCE_MAP TOOL=0 PROFILE=PLA SAVE=1
+SAVE_CONFIG
+```
 
 ### `AUTO_PRESSURE_ADVANCE_STATUS`
 
@@ -217,9 +232,11 @@ of the last calibration.  The version line is the quickest way to confirm
 which build of the plugin the printer is actually running:
 
 ```
-auto_pressure_advance plugin version 1.1
+auto_pressure_advance plugin version 1.3
   sensor          : cs1237
   extruder        : extruder
+  ace tool        : T0
+  active profile  : pla
   unknown options : none
 ```
 
@@ -286,15 +303,27 @@ tool_profiles: 0=PLA, 1=PETG
 ```
 
 With `auto_apply_profiles: True` (the default) the plugin watches the
-ACE Pro and applies the matching profile whenever the tool changes, so a
-multi-material print automatically uses the right value for each filament.
-The application is suspended while a calibration is running.
+ACE Pro manager (`printer.ace`) and reads `current_index` from its
+`get_status()` callback.  When ACE sets a new tool index, the plugin waits
+for `toolchange_in_progress` to clear (i.e. for the post-toolchange purge to
+finish) and then applies the mapped pressure advance.  A multi-material
+print therefore uses the right value for each filament.  The application is
+suspended while a calibration is running, and the current profile is
+re-applied after a Klipper restart.
+
+The mapping can also be edited without restarting:
+
+```gcode
+AUTO_PRESSURE_ADVANCE_MAP TOOL=0 PROFILE=PLA SAVE=1
+SAVE_CONFIG
+```
 
 Manual control:
 
 ```gcode
-AUTO_PRESSURE_ADVANCE_PROFILES    # list the stored profiles
+AUTO_PRESSURE_ADVANCE_PROFILES    # list the stored profiles and active tool
 AUTO_PRESSURE_ADVANCE_APPLY PROFILE=PETG
+AUTO_PRESSURE_ADVANCE_STATUS      # version, active profile and last calibration
 ```
 
 If you would rather not use this plugin for the switching, the same
@@ -331,9 +360,9 @@ already contains the newer options.
    actually runs, usually `~/klipper/klippy/extras/`).
 2. `FIRMWARE_RESTART`
 3. Run `AUTO_PRESSURE_ADVANCE_STATUS` and check that it reports
-   `version 1.1`.
+   `version 1.3` and the ACE tool/profile currently in use.
 
-Version 1.1 of the plugin also *consumes* options it does not recognise
+Version 1.3 of the plugin also *consumes* options it does not recognise
 (it logs a warning for each one and keeps going), so a config file that
 still carries options from an older config block can no longer stop the
 printer from starting.  The recognised options are listed above; remove
