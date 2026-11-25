@@ -71,10 +71,10 @@ FIRMWARE_RESTART
    advance in `pa_start .. pa_end`, then refines the search around the
    best value (`refine_passes`, `refine_ratio`) and fits a parabola
    through the three points around the minimum for the final value.  The
-   best value is applied immediately and, by default, written to
-   `printer.cfg` automatically.  Klipper performs a `SAVE_CONFIG` and restarts
-   once the printer is idle; pass `SAVE=0` or set `auto_save_config: False`
-   to keep the value in memory only.
+   best value is applied immediately.  `SAVE=1` stages the result and writes
+   it to `printer.cfg` automatically once the printer is idle; `SAVE=0`
+   leaves it in memory only.  When `SAVE` is omitted, `auto_save_config`
+   supplies the default.
 
 5. **Safety.**  The calibration requires homed axes, refuses to run while
    a print is active, heats the nozzle to `extruder_temp` and moves to a
@@ -132,9 +132,10 @@ Add to `printer.cfg`:
 # min_response_ratio: 5.0  # minimum force response / sensor noise
 # require_response: True   # abort when the load cell does not react at all
 
-# Behaviour.  Staged config changes (pressure_advance, profiles,
-# tool_profiles) are written to printer.cfg automatically when the printer is
-# idle.  This runs Klipper's SAVE_CONFIG, so the printer restarts once.
+# Behaviour.  SAVE=1 stages changes (pressure_advance, profiles,
+# tool_profiles) and writes them to printer.cfg automatically when idle;
+# SAVE=0 disables config writes for that command.  auto_save_config sets the
+# default when SAVE is omitted.
 # auto_save_config: True
 # auto_save_delay: 1.0    # seconds to wait before the automatic save
 # save_config: False      # legacy option; kept for old macros
@@ -186,9 +187,10 @@ G28
 AUTO_PRESSURE_ADVANCE_CALIBRATE EXTRUDER_TEMP=220 PA_START=0.0 PA_END=0.08 PA_STEP=0.01 PROFILE=PLA
 ```
 
-`SAVE` defaults to `1`, so the result, the `profiles` list and any tool
-mapping are staged and then written to `printer.cfg` automatically when the
-printer is idle.  Use `SAVE=0` to try a value without persisting it.
+`SAVE=1` stages the result, the `profiles` list and any tool mapping, then
+writes them to `printer.cfg` automatically when the printer is idle.
+`SAVE=0` disables all config writes for this calibration.  If `SAVE` is
+omitted, `auto_save_config` supplies the default.
 
 Parameters: `PA_START`, `PA_END`, `PA_STEP`, `EXTRUDER_TEMP`, `BED_TEMP`,
 `CYCLES`, `SAMPLE_RATE`, `EXTRUDER`, `SAVE`, `PROFILE`.  Older macros used
@@ -214,9 +216,10 @@ Parameters: `EXTRUDER_TEMP`.
 ### `AUTO_PRESSURE_ADVANCE_SET`
 
 Sets the pressure advance by hand.  With `PROFILE=` the value is also stored
-as a named filament profile.  `SAVE` defaults to `1`; both the live value and
-the profile are automatically persisted to `printer.cfg` when the printer is
-idle.
+as a named filament profile.  `SAVE=1` persists both the live value and the
+profile to `printer.cfg` automatically when the printer is idle.  `SAVE=0`
+keeps both in memory only; omitting `SAVE` uses the `auto_save_config`
+default.
 
 ```gcode
 AUTO_PRESSURE_ADVANCE_SET ADVANCE=0.035
@@ -234,14 +237,17 @@ automatically.
 AUTO_PRESSURE_ADVANCE_MAP TOOL=0 PROFILE=PLA
 ```
 
-`SAVE` defaults to `1`, so the mapping is written to `printer.cfg`
-automatically when the printer is idle.
+`SAVE=1` writes the mapping to `printer.cfg` automatically when the printer
+is idle.  `SAVE=0` keeps the new mapping in memory only; omitting `SAVE` uses
+the `auto_save_config` default.
 
 ### Automatic persistence
 
-`SAVE_CONFIG` rewrites `printer.cfg` and restarts Klipper.  To avoid
-interrupting a print, the plugin stages changes with `configfile.set()` and
-runs `SAVE_CONFIG` from a timer after `auto_save_delay`.  It waits while
+`SAVE_CONFIG` rewrites `printer.cfg` and restarts Klipper.  `SAVE=0` disables
+this entirely for the command; `SAVE=1` forces it, overriding
+`auto_save_config`.  To avoid interrupting a print, the plugin stages changes
+with `configfile.set()` and runs `SAVE_CONFIG` from a timer after
+`auto_save_delay`.  It waits while
 `print_stats.state` is `printing` or `paused`, while ACE reports a toolchange
 in progress, and while a calibration is running.  `AUTO_PRESSURE_ADVANCE_STATUS`
 shows `auto save : waiting to save (...)` while it is waiting.  If Klipper
@@ -312,10 +318,10 @@ AUTO_PRESSURE_ADVANCE_CALIBRATE PROFILE=PETG EXTRUDER_TEMP=240
 ```
 
 `PROFILE=<name>` stores the result under that name in the `profiles` option
-of the `[auto_pressure_advance]` section.  With `auto_save_config: True` the
-plugin stages the value and runs `SAVE_CONFIG` automatically once the printer
-is idle; Klipper writes the values into the autosave block at the bottom of
-`printer.cfg` and then restarts.
+of the `[auto_pressure_advance]` section.  `SAVE=1` stages the value and runs
+`SAVE_CONFIG` automatically once the printer is idle; Klipper writes the
+values into the autosave block at the bottom of `printer.cfg` and then
+restarts.  `SAVE=0` leaves the profile in memory only.
 
 ### Using the values
 

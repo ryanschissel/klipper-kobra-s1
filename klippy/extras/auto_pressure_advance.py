@@ -393,11 +393,15 @@ class AutoPressureAdvance:
                 return False
         return True
 
-    def _request_auto_save(self, reason):
-        """Persist staged config changes once it is safe to restart."""
+    def _request_auto_save(self, reason, force=False):
+        """Persist staged config changes once it is safe to restart.
+
+        ``force`` is set when the command explicitly passed SAVE=1; that
+        per-command choice overrides auto_save_config.
+        """
         self._save_reason = reason
         self._save_error = None
-        if not self.auto_save_config:
+        if not self.auto_save_config and not force:
             return False
         waketime = self.reactor.monotonic() + self.auto_save_delay
         try:
@@ -1050,18 +1054,18 @@ class AutoPressureAdvance:
     cmd_calibrate_help = (
         "Calibrate pressure advance from the load cell. Parameters: "
         "PA_START=<f> PA_END=<f> PA_STEP=<f> EXTRUDER_TEMP=<c> "
-        "BED_TEMP=<c> CYCLES=<n> SAMPLE_RATE=<hz> SAVE=<0|1, default 1> "
+        "BED_TEMP=<c> CYCLES=<n> SAMPLE_RATE=<hz> SAVE=<0|1> (0=no save, 1=auto save) "
         "PROFILE=<name> (PA_PROFILE=<name> also accepted)")
     cmd_set_help = (
         "Set the pressure advance value. Parameters: ADVANCE=<f> "
-        "SMOOTH_TIME=<s> SAVE=<0|1, default 1> PROFILE=<name>")
+        "SMOOTH_TIME=<s> SAVE=<0|1> (0=no save, 1=auto save) PROFILE=<name>")
     cmd_apply_help = (
         "Apply a stored pressure advance profile. Parameters: PROFILE=<name>")
     cmd_profiles_help = (
         "List the stored pressure advance profiles and the tool mapping.")
     cmd_map_help = (
         "Map an ACE Pro tool index to a pressure advance profile. "
-        "Parameters: TOOL=<n> PROFILE=<name> SAVE=<0|1, default 1>")
+        "Parameters: TOOL=<n> PROFILE=<name> SAVE=<0|1> (0=no save, 1=auto save)")
     cmd_test_help = (
         "Run a single calibration move and report the measured force "
         "response (diagnostics). Parameters: EXTRUDER_TEMP=<c>")
@@ -1072,6 +1076,18 @@ class AutoPressureAdvance:
         """Read PROFILE, accepting PA_PROFILE used by older macros."""
         name = gcmd.get('PROFILE', None) or gcmd.get('PA_PROFILE', None)
         return name.strip() if name else None
+
+    def _get_save_flag(self, gcmd):
+        """Return (save, explicit).
+
+        SAVE=0 disables config persistence for this command.  SAVE=1 stages
+        the changes and forces an automatic SAVE_CONFIG when it is safe.
+        When SAVE is omitted, auto_save_config/save_config supply the default.
+        """
+        if gcmd.get('SAVE', None) is None:
+            default = 1 if (self.save_config or self.auto_save_config) else 0
+            return default, False
+        return gcmd.get_int('SAVE', None, minval=0, maxval=1), True
 
     def cmd_profiles(self, gcmd):
         tool, _in_progress = self._get_current_tool()
@@ -1111,10 +1127,7 @@ class AutoPressureAdvance:
         smooth_time = gcmd.get_float(
             'SMOOTH_TIME', None, minval=0., maxval=.200)
         extruder = gcmd.get('EXTRUDER', self.extruder_name)
-        save = gcmd.get_int('SAVE',
-                            1 if (self.save_config or self.auto_save_config)
-                            else 0, minval=0,
-                            maxval=1)
+        save, save_explicit = self._get_save_flag(gcmd)
         profile = self._get_profile_name(gcmd)
         cmd = "SET_PRESSURE_ADVANCE EXTRUDER=%s ADVANCE=%.6f" % (extruder,
                                                                   advance)
@@ -1134,7 +1147,8 @@ class AutoPressureAdvance:
                    profile, advance))
         if save:
             self._save_pa(extruder, advance, smooth_time)
-            self._request_auto_save("pressure advance set")
+            self._request_auto_save("pressure advance set",
+                                    force=save_explicit)
             gcmd.respond_info(self._save_hint())
 
     def cmd_map(self, gcmd):
@@ -1150,10 +1164,11 @@ class AutoPressureAdvance:
                 "auto_pressure_advance: unknown profile '%s' (known: %s)"
                 % (name, ", ".join(sorted(self.profiles)) or "none"))
         self.tool_profiles[tool] = key
-        save = gcmd.get_int('SAVE', 1, minval=0, maxval=1)
+        save, save_explicit = self._get_save_flag(gcmd)
         if save:
             self._store_tool_profiles()
-            self._request_auto_save("ACE tool profile map")
+            self._request_auto_save("ACE tool profile map",
+                                    force=save_explicit)
             gcmd.respond_info(self._save_hint())
             return
         gcmd.respond_info("Mapped T%d to pressure advance profile '%s' "
@@ -1289,10 +1304,7 @@ class AutoPressureAdvance:
         cycles = gcmd.get_int('CYCLES', self.cycles, minval=1)
         sample_rate = gcmd.get_float('SAMPLE_RATE', self.sample_rate,
                                      above=1.)
-        save = gcmd.get_int('SAVE',
-                            1 if (self.save_config or self.auto_save_config)
-                            else 0, minval=0,
-                            maxval=1)
+        save, save_explicit = self._get_save_flag(gcmd)
         extruder = gcmd.get('EXTRUDER', self.extruder_name)
         profile = self._get_profile_name(gcmd)
 
@@ -1348,7 +1360,8 @@ class AutoPressureAdvance:
                 gcmd.respond_info("Updated pressure advance profile '%s' = "
                                   "%.6f (not saved)." % (profile, best_pa))
         if save:
-            self._request_auto_save("calibration result")
+            self._request_auto_save("calibration result",
+                                    force=save_explicit)
             gcmd.respond_info(self._save_hint())
 
     def _format_result(self, result):
